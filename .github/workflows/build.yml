@@ -51,7 +51,8 @@ jobs:
         shell: pwsh
         run: |
           $h = (Get-FileHash dist\ClusterMonitor.exe -Algorithm SHA256).Hash.ToLower()
-          "$h  ClusterMonitor.exe" | Out-File -Encoding ascii dist\ClusterMonitor.exe.sha256
+          # LF line ending so `shasum -c` / `sha256sum -c` work on macOS and Linux too.
+          [IO.File]::WriteAllText("dist\ClusterMonitor.exe.sha256", "$h  ClusterMonitor.exe`n")
           Get-Content dist\ClusterMonitor.exe.sha256
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
