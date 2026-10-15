@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cluster Monitor</title>
+<style>
+:root {
+  --bg: #f4f5f7; --card: #ffffff; --fg: #1b1f24; --muted: #6b7380; --faint: #9aa1ab; --line: #e3e6ea;
+  --track: #eceff3; --free: #2f9e6b; --free-bg: #e8f6ef; --low: #8fc9a9; --mid: #e0a83a; --high: #d1493f;
+  --me: #3b6fd8; --me-bg: #e9f0fd;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111417; --card: #1a1e23; --fg: #e6e9ed; --muted: #8b939e; --faint: #626a75; --line: #2a3038;
+    --track: #262c33; --free: #3fb67e; --free-bg: #17291f; --low: #3f7a5a; --mid: #d39a2e; --high: #d65a50;
+    --me: #6c9bf0; --me-bg: #1c2840;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
+
+/* Summary */
+.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; margin-bottom: 12px; }
+.top h1 { font-size: 18px; margin: 0; }
+.bignum { font-size: 15px; }
+.bignum b { font-size: 22px; color: var(--free); font-variant-numeric: tabular-nums; }
+.models { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+  padding: 1px 10px; font-size: 13px; white-space: nowrap; }
+.chip b { color: var(--free); }
+.chip.none b { color: var(--faint); }
+.sub { width: 100%; color: var(--muted); font-size: 12px; }
+
+/* Node rows */
+.list { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.node { display: grid; grid-template-columns: 150px 190px 1fr; gap: 14px; align-items: center;
+  padding: 10px 14px; border-top: 1px solid var(--line); }
+.node:first-child { border-top: none; }
+.node.down { color: var(--faint); }
+.name { font-weight: 600; font-size: 15px; }
+.name .freecount { font-weight: 500; font-size: 13px; color: var(--free); margin-left: 6px; }
+.name .freecount.zero { color: var(--faint); }
+.model { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.warn { color: var(--mid); font-size: 12px; }
+.err { color: var(--high); font-size: 12px; font-family: var(--mono); }
+
+.res { font-size: 12px; color: var(--muted); }
+.res > div { display: grid; grid-template-columns: 28px 1fr 74px; gap: 6px; align-items: center; margin: 3px 0; }
+.mini { height: 5px; background: var(--track); border-radius: 3px; overflow: hidden; }
+.mini > i { display: block; height: 100%; }
+.res .num { font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: right; white-space: nowrap; }
+
+/* GPU tiles */
+.gpus { display: flex; flex-wrap: wrap; gap: 6px; }
+.tile { position: relative; width: 70px; height: 44px; border-radius: 6px; overflow: hidden;
+  background: var(--track); border: 1px solid transparent; cursor: default; }
+.tile .fill { position: absolute; left: 0; right: 0; bottom: 0; }
+.tile .util { position: absolute; top: 3px; left: 6px; font: 600 15px/1 var(--mono); }
+.tile .idx { position: absolute; top: 4px; right: 6px; font-size: 10px; color: var(--muted); }
+.tile .who { position: absolute; left: 0; right: 0; bottom: 3px; padding: 0 5px; font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.free { background: transparent; border: 1px dashed var(--free); }
+.tile.free .util { color: var(--free); font-size: 12px; font-weight: 500; top: 5px; }
+.tile.free .who { color: var(--faint); }
+.tile.busy { border-color: var(--line); }
+.tile.mine { border: 2px solid var(--me); }
+.tile.mine .who { color: var(--me); font-weight: 600; }
+.tile.hot .idx { color: var(--high); font-weight: 600; }
+
+/* Tooltip */
+#tip { position: fixed; z-index: 10; max-width: min(560px, calc(100vw - 32px)); pointer-events: none;
+  background: var(--fg); color: var(--bg); border-radius: 6px; padding: 8px 10px; font-size: 12px;
+  line-height: 1.5; display: none; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+#tip .cmd { font-family: var(--mono); font-size: 11px; opacity: .85; word-break: break-all; }
+
+/* Login */
+.login { max-width: 360px; margin: 12vh auto 0; background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; padding: 24px; }
+.login h1 { font-size: 20px; margin: 0 0 4px; }
+.login p { color: var(--muted); font-size: 12px; margin: 0 0 16px; }
+.login label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+.login input { width: 100%; padding: 8px 10px; font-size: 14px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+.login input:focus { outline: 2px solid var(--me); outline-offset: -1px; }
+.login .pair { display: grid; grid-template-columns: 1fr 90px; gap: 8px; }
+.login details { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.login button { width: 100%; margin-top: 18px; padding: 9px; font-size: 14px; border: none;
+  border-radius: 6px; background: var(--me); color: #fff; cursor: pointer; }
+.login button:disabled { opacity: .6; cursor: wait; }
+.login .msg { color: var(--high); font-size: 12px; margin-top: 10px; min-height: 1em; }
+.btn-link { margin-left: auto; background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; padding: 2px 10px; font-size: 12px; cursor: pointer; }
+.unavail { margin-top: 10px; font-size: 12px; color: var(--faint); }
+.unavail summary { cursor: pointer; }
+.unavail div { font-family: var(--mono); font-size: 11px; margin: 2px 0 0 14px; }
+.login .server { color: var(--muted); font-size: 12px; margin: -8px 0 14px; font-family: var(--mono); }
+.login .note { color: var(--mid); font-size: 12px; margin-bottom: 6px; min-height: 0; }
+.confirm { margin-top: 12px; padding: 10px; border: 1px solid var(--mid); border-radius: 6px; font-size: 12px; }
+.confirm code, .newkeys code { font-family: var(--mono); font-size: 11px; word-break: break-all; }
+.newkeys { margin-bottom: 10px; padding: 10px 14px; background: var(--card); border: 1px solid var(--mid);
+  border-radius: 10px; font-size: 12px; }
+.newkeys .row1 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; }
+.newkeys button { font-size: 12px; padding: 2px 10px; border-radius: 6px; border: 1px solid var(--me);
+  background: var(--me-bg); color: var(--me); cursor: pointer; }
+[hidden] { display: none !important; }
+
+@media (max-width: 720px) {
+  .node { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 6px 14px; padding: 9px 12px; }
+  .gpus { grid-column: 1 / -1; }
+}
+</style>
+</head>
+<body>
+<form class="login" id="login" hidden autocomplete="on">
+  <h1>集群监控</h1>
+  <p>密码只保存在内存里，不会写到磁盘；只发给主机密钥已确认的服务器。</p>
+  <div class="server" id="f-server"></div>
+  <div class="note" id="f-note"></div>
+  <label for="f-user">用户名</label>
+  <input id="f-user" name="username" autocomplete="username" required>
+  <label for="f-pass">密码</label>
+  <input id="f-pass" name="password" type="password" autocomplete="current-password">
+  <details id="f-adv"><summary>高级设置</summary>
+    <label for="f-host">跳板机地址 / 端口</label>
+    <div class="pair"><input id="f-host" name="host" required placeholder="例如 login.example.edu">
+      <input id="f-port" name="port" inputmode="numeric" placeholder="22"></div>
+    <label for="f-nodes">要监控的节点（逗号分隔，支持 node1-20 这样的范围）</label>
+    <input id="f-nodes" name="nodes" placeholder="node1-8, gpu-a">
+    <label for="f-disks">要显示用量的磁盘挂载点（可选）</label>
+    <input id="f-disks" name="disks" placeholder="/home, /scratch">
+    <label for="f-key">私钥文件路径（填了可以不输密码）</label>
+    <input id="f-key" name="key" placeholder="C:\Users\me\.ssh\id_ed25519"></details>
+  <button id="f-submit" type="submit">登录</button>
+  <div class="msg" id="f-msg"></div>
+  <div class="confirm" id="f-confirm" hidden>
+    第一次连接这台跳板机（<span id="f-confirm-host"></span>），它的主机密钥指纹是：<br>
+    <code id="f-confirm-fp"></code><br>
+    请向管理员核对指纹，一致后再点"确认指纹并登录"。不一致说明可能有人冒充服务器，不要继续。
+    <button id="f-confirm-btn" type="button">确认指纹并登录</button>
+  </div>
+</form>
+<div class="wrap" id="dash" hidden>
+  <div class="top">
+    <h1>集群监控</h1>
+    <span class="bignum" id="bignum">加载中…</span>
+    <div class="models" id="models"></div>
+    <button class="btn-link" id="logout" type="button">退出登录</button>
+    <div class="sub" id="sub"></div>
+  </div>
+  <div class="newkeys" id="newkeys" hidden></div>
+  <div class="list" id="nodes"></div>
+  <details class="unavail" id="unavail" hidden><summary></summary><div id="unavail-list"></div></details>
+</div>
+<div id="tip"></div>
+<script>
+const TOKEN = "__API_TOKEN__";
+let ME = "";
+const api = (path, body) => fetch(path, body === undefined
+  ? {cache: "no-store", headers: {"X-Token": TOKEN}}
+  : {method: "POST", headers: {"X-Token": TOKEN, "Content-Type": "application/json"}, body: JSON.stringify(body)});
+const HOT_C = 80;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const gb = mib => (mib / 1024).toFixed(mib >= 10240 ? 0 : 1);
+const ago = s => s < 60 ? `${Math.round(s)}s` : `${Math.round(s / 60)}min`;
+const isFree = g => g.procs.length === 0 && g.mem_used < 1024;
+const fillColor = f => f >= 0.85 ? "var(--high)" : f >= 0.4 ? "var(--mid)" : "var(--low)";
+const loadColor = f => f >= 0.9 ? "var(--high)" : f >= 0.6 ? "var(--mid)" : "var(--free)";
+const shortName = m => m.replace(/^GeForce /, "").replace(" Ada Generation", " Ada");
+const shortUser = u => u === ME ? "我" : u.replace(/\d{4,}$/, "");
+const nodeNum = n => parseInt(n.replace(/\D/g, ""), 10) || 0;
+let tipData = [];
+
+function owners(g) {
+  const users = [...new Set(g.procs.map(p => p.user))];
+  return users;
+}
+
+function tileHtml(g, node) {
+  const id = tipData.push({g, node}) - 1;
+  const hot = g.temp >= HOT_C ? " hot" : "";
+  if (isFree(g)) {
+    return `<div class="tile free${hot}" data-tip="${id}"><span class="idx">${g.index}</span>` +
+      `<span class="util">空闲</span><span class="who">${gb(g.mem_total)}G</span></div>`;
+  }
+  const f = g.mem_used / g.mem_total;
+  const users = owners(g);
+  const mine = users.includes(ME) ? " mine" : "";
+  const who = users.length ? users.map(shortUser).join(",") : "?";
+  return `<div class="tile busy${mine}${hot}" data-tip="${id}">` +
+    `<div class="fill" style="height:${(f * 100).toFixed(0)}%;background:${fillColor(f)};opacity:.45"></div>` +
+    `<span class="util">${g.util}%</span><span class="idx">${g.index}</span>` +
+    `<span class="who">${esc(who)}</span></div>`;
+}
+
+function resHtml(label, used, total, frac, text) {
+  return `<div><span>${label}</span><div class="mini"><i style="width:${Math.min(100, frac * 100).toFixed(0)}%;background:${loadColor(frac)}"></i></div>` +
+    `<span class="num">${text}</span></div>`;
+}
+
+function modelSummary(gpus) {
+  const counts = {};
+  gpus.forEach(g => { const m = shortName(g.name); counts[m] = (counts[m] || 0) + 1; });
+  return Object.entries(counts).map(([m, c]) => `${c}× ${m}`).join(" + ");
+}
+
+function nodeHtml(n, now) {
+  if (!n.nproc) {
+    return `<div class="node down"><div><div class="name">${esc(n.node)}</div></div>` +
+      `<div class="err" style="grid-column: 2 / -1">${esc(n.error || "无数据")}</div></div>`;
+  }
+  const free = n.gpus.filter(isFree).length;
+  const age = now - n.ts;
+  const status = n.stale ? `<div class="warn">数据过期 ${ago(age)}</div>`
+    : age > 3 * window.__interval + 30 ? `<div class="warn">${ago(age)} 前</div>` : "";
+  return `<div class="node">
+    <div><div class="name">${esc(n.node)}<span class="freecount${free ? "" : " zero"}">空 ${free}/${n.gpus.length}</span></div>
+      <div class="model" title="${esc(modelSummary(n.gpus))}">${esc(modelSummary(n.gpus))}</div>${status}</div>
+    <div class="res">
+      ${resHtml("CPU", n.load[0], n.nproc, n.load[0] / n.nproc, `${n.load[0].toFixed(0)}/${n.nproc} 核`)}
+      ${resHtml("内存", n.mem_used_mib, n.mem_total_mib, n.mem_used_mib / n.mem_total_mib, `${gb(n.mem_used_mib)}/${gb(n.mem_total_mib)}G`)}
+    </div>
+    <div class="gpus">${n.gpus.map(g => tileHtml(g, n)).join("")}</div>
+  </div>`;
+}
+
+function tipHtml({g, node}) {
+  let html = `<b>${esc(node.node)} · GPU ${g.index}</b> ${esc(shortName(g.name))}<br>` +
+    `显存 ${gb(g.mem_used)}/${gb(g.mem_total)}G · 利用率 ${g.util}% · ${g.temp}°C`;
+  g.procs.forEach(p => {
+    html += `<br><br><b>${esc(p.user)}</b> · pid ${esc(p.pid)} · ${gb(p.mem_mib)}G · 已运行 ${esc(p.etime)}` +
+      `<div class="cmd">${esc(p.cmd)}</div>`;
+  });
+  if (node.cpu_users && node.cpu_users.length) {
+    html += `<br>节点 CPU 大户：` + node.cpu_users.map(u => `${esc(u.user)} ${Math.round(u.pcpu)}%`).join("，");
+  }
+  return html;
+}
+
+const tip = document.getElementById("tip");
+document.addEventListener("mousemove", e => {
+  const el = e.target.closest("[data-tip]");
+  if (!el || !tipData[el.dataset.tip]) { tip.style.display = "none"; return; }
+  tip.innerHTML = tipHtml(tipData[el.dataset.tip]);
+  tip.style.display = "block";
+  const r = tip.getBoundingClientRect();
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + r.width > innerWidth - 8) x = Math.max(8, e.clientX - r.width - 14);
+  if (y + r.height > innerHeight - 8) y = Math.max(8, e.clientY - r.height - 14);
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+});
+
+const $ = id => document.getElementById(id);
+let formFilled = false;
+
+function showLogin(s) {
+  $("dash").hidden = true;
+  $("login").hidden = false;
+  if (!formFilled) {
+    formFilled = true;
+    $("f-host").value = s.settings.jump_host || "";
+    $("f-port").value = s.settings.jump_port || 22;
+    $("f-user").value = s.settings.username || "";
+    $("f-key").value = s.settings.key_file || "";
+    $("f-nodes").value = s.settings.nodes || "";
+    $("f-disks").value = s.settings.disks || "";
+    if (s.settings.key_file || !s.settings.jump_host || !s.settings.nodes) $("f-adv").open = true;
+    ($("f-user").value ? $("f-pass") : $("f-user")).focus();
+  }
+  $("f-server").textContent = `跳板机 ${$("f-host").value}:${$("f-port").value || 22}`;
+  $("f-note").textContent = s.message || "";
+}
+
+$("f-host").addEventListener("input", () => $("f-server").textContent = `跳板机 ${$("f-host").value}:${$("f-port").value || 22}`);
+$("f-port").addEventListener("input", () => $("f-server").textContent = `跳板机 ${$("f-host").value}:${$("f-port").value || 22}`);
+
+async function doLogin(trustFingerprint) {
+  $("f-submit").disabled = true;
+  $("f-submit").textContent = "连接中…";
+  $("f-msg").textContent = "";
+  $("f-confirm").hidden = true;
+  try {
+    const r = await api("/api/login", {
+      jump_host: $("f-host").value, jump_port: $("f-port").value || 22,
+      username: $("f-user").value, password: $("f-pass").value, key_file: $("f-key").value,
+      nodes: $("f-nodes").value, disks: $("f-disks").value,
+      trust_fingerprint: trustFingerprint || ""});
+    const j = await r.json();
+    if (r.status === 409 && j.confirm_fingerprint) {
+      $("f-confirm-host").textContent = j.host;
+      $("f-confirm-fp").textContent = j.confirm_fingerprint;
+      $("f-confirm").hidden = false;
+      return;
+    }
+    if (!r.ok) { $("f-msg").textContent = j.error || `登录失败 (${r.status})`; return; }
+    $("f-pass").value = "";
+    $("f-note").textContent = "";
+    await refresh();
+  } catch (err) {
+    $("f-msg").textContent = "本地服务没有响应";
+  } finally {
+    $("f-submit").disabled = false;
+    $("f-submit").textContent = "登录";
+  }
+}
+
+$("login").addEventListener("submit", e => { e.preventDefault(); doLogin(""); });
+$("f-confirm-btn").addEventListener("click", () => doLogin($("f-confirm-fp").textContent));
+$("newkeys").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-node]");
+  if (!btn) return;
+  btn.disabled = true;
+  const r = await api("/api/trust", {node: btn.dataset.node, fingerprint: btn.dataset.fp});
+  if (!r.ok) alert((await r.json()).error || "确认失败");
+  await refresh();
+});
+
+$("logout").addEventListener("click", async () => {
+  await api("/api/logout", {});
+  formFilled = false;
+  await refresh();
+});
+
+function renderNewKeys(nodes) {
+  const box = $("newkeys");
+  box.hidden = nodes.length === 0;
+  if (!nodes.length) return;
+  box.innerHTML = `<b>${nodes.length} 个节点第一次连接，需要确认主机密钥</b>（确认前不会把密码发给它们）。` +
+    `请向管理员核对指纹，一致再点"信任"。` +
+    nodes.map(n => `<div class="row1"><b>${esc(n.node)}</b><code>${esc(n.fingerprint)}</code>` +
+      `<button type="button" data-node="${esc(n.node)}" data-fp="${esc(n.fingerprint)}">信任</button></div>`).join("");
+}
+
+function renderUnavailable(nodes) {
+  const box = $("unavail");
+  box.hidden = nodes.length === 0;
+  if (!nodes.length) return;
+  box.querySelector("summary").textContent =
+    `${nodes.length} 个节点不可用：${nodes.map(n => n.node).join(", ")}`;
+  $("unavail-list").innerHTML = nodes.map(n => `<div>${esc(n.node)}：${esc(n.error)}</div>`).join("");
+}
+
+async function refresh() {
+  try {
+    const s = await (await api("/api/state")).json();
+    if (!s.logged_in) { showLogin(s); return; }
+    $("login").hidden = true;
+    $("dash").hidden = false;
+    ME = s.username;
+    window.__interval = s.interval;
+    tipData = [];
+    const live = s.nodes.filter(n => n.nproc);
+    const pending = s.nodes.filter(n => !n.nproc && n.pending);
+    renderNewKeys(s.nodes.filter(n => n.kind === "hostkey_unknown"));
+    renderUnavailable(s.nodes.filter(n => !n.nproc && !n.pending && n.kind !== "hostkey_unknown"));
+    const gpus = live.flatMap(n => n.gpus);
+    const free = gpus.filter(isFree);
+    const mine = gpus.filter(g => g.procs.some(p => p.user === ME)).length;
+
+    // Free cards by model, larger memory first.
+    const byModel = {};
+    gpus.forEach(g => {
+      const m = shortName(g.name);
+      byModel[m] = byModel[m] || {free: 0, total: 0, mem: g.mem_total};
+      byModel[m].total += 1;
+      if (isFree(g)) byModel[m].free += 1;
+    });
+    document.getElementById("bignum").innerHTML = `空闲 <b>${free.length}</b> / ${gpus.length} 卡`;
+    document.getElementById("models").innerHTML = Object.entries(byModel)
+      .sort((a, b) => b[1].mem - a[1].mem)
+      .map(([m, v]) => `<span class="chip${v.free ? "" : " none"}">${esc(m)} ${gb(v.mem)}G <b>${v.free}</b>/${v.total}</span>`)
+      .join("");
+
+    const d = live.find(n => n.disks && n.disks.length);
+    const disk = d ? d.disks.map(x => `${x.mount} 剩 ${x.size_gb - x.used_gb}G（${Math.round(100 * x.used_gb / x.size_gb)}%）`).join(" · ") : "";
+    document.getElementById("sub").textContent =
+      [mine ? `我在用 ${mine} 卡` : "我没有占卡", disk, pending.length ? `${pending.length} 个节点连接中…` : "",
+       `每 ${s.interval}s 刷新 · ${new Date().toLocaleTimeString()}`].filter(Boolean).join("  ·  ");
+
+    const sorted = [...live].sort((a, b) =>
+      ((b.gpus || []).filter(isFree).length - (a.gpus || []).filter(isFree).length) ||
+      (nodeNum(a.node) - nodeNum(b.node)));
+    document.getElementById("nodes").innerHTML = sorted.map(n => nodeHtml(n, s.now)).join("");
+  } catch (e) {
+    document.getElementById("sub").textContent = "本地服务没有响应，请重启软件";
+  }
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

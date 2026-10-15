@@ -1,0 +1,72 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write  # only used by the release step on v* tags
+    steps:
+      # Actions are pinned to full commit SHAs (tag in the comment) so a moved tag cannot change the build.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies (hash-locked)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes --prefer-binary -r requirements-windows.txt
+
+      - name: Unit tests
+        run: python -m pytest -q tests
+
+      - name: Build exe
+        shell: pwsh
+        run: |
+          # defaults/ (site config + pinned host keys) is optional; site forks add it.
+          $extra = @()
+          if (Test-Path defaults) { $extra += @("--add-data", "defaults;defaults") }
+          pyinstaller --noconfirm --clean --onefile --windowed --name ClusterMonitor `
+            --add-data "static;static" @extra --collect-submodules webview run.py
+
+      - name: Self-test the built exe
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\ClusterMonitor.exe -ArgumentList "--selftest","--with-webview" -Wait -PassThru
+          Get-Content "$env:APPDATA\ClusterMonitor\cluster_monitor.log" -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "selftest failed with exit code $($p.ExitCode)" }
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash dist\ClusterMonitor.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  ClusterMonitor.exe" | Out-File -Encoding ascii dist\ClusterMonitor.exe.sha256
+          Get-Content dist\ClusterMonitor.exe.sha256
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ClusterMonitor-windows
+          path: |
+            dist/ClusterMonitor.exe
+            dist/ClusterMonitor.exe.sha256
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $h = (Get-Content dist\ClusterMonitor.exe.sha256).Split(" ")[0]
+          $notes = "SHA256 (ClusterMonitor.exe): $h`n`nBuilt by GitHub Actions run $env:GITHUB_RUN_ID from commit $env:GITHUB_SHA."
+          gh release create $env:GITHUB_REF_NAME dist/ClusterMonitor.exe dist/ClusterMonitor.exe.sha256 --title $env:GITHUB_REF_NAME --notes $notes

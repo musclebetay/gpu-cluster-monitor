@@ -1,0 +1,4 @@
+paramiko>=3.4,<4
+pywebview>=5.1,<6
+pyinstaller>=6.10,<7
+pytest>=8,<10
